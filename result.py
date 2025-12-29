@@ -27,44 +27,17 @@ from datetime import datetime
 
 def setup_python_path():
     """Setup Python path to include the script directory for imports."""
-    script_dir = None
-    
     try:
-        # Try to get from __file__ first
-        if '__file__' in globals() and __file__:
+        if '__file__' in globals():
             script_dir = os.path.dirname(os.path.abspath(__file__))
-    except:
-        pass
-    
-    # Fallback: Check common Colab locations
-    if not script_dir or not os.path.exists(script_dir):
-        colab_paths = [
-            '/content/Mismatch_report',
-            '/content/mismatches',
-            os.path.join(os.getcwd(), 'Mismatch_report'),
-            os.getcwd()
-        ]
+        else:
+            script_dir = os.getcwd()
         
-        for path in colab_paths:
-            if os.path.exists(path):
-                # Check if this directory has our modules
-                if os.path.exists(os.path.join(path, 'part1_etof_file_processing.py')):
-                    script_dir = path
-                    break
-    
-    if script_dir:
-        if script_dir not in sys.path:
+        if script_dir and script_dir not in sys.path:
             sys.path.insert(0, script_dir)
-            print(f"📁 Added to Python path: {script_dir}")
-        
-        # Also change to that directory
-        if os.getcwd() != script_dir:
-            os.chdir(script_dir)
-            print(f"📁 Changed working directory to: {script_dir}")
-    else:
-        print(f"⚠️ Warning: Could not find script directory with modules")
-        print(f"   Current directory: {os.getcwd()}")
-        print(f"   sys.path[0]: {sys.path[0] if sys.path else 'empty'}")
+            
+    except Exception as e:
+        print(f"⚠️ Warning: Could not auto-detect script directory: {e}")
 
 
 # Run setup when module is imported
@@ -184,33 +157,16 @@ def run_workflow(
             script_dir = os.path.dirname(os.path.abspath(__file__))
         except:
             script_dir = os.getcwd()
-        
-        # Check for Colab paths if modules not found
-        if not os.path.exists(os.path.join(script_dir, 'part1_etof_file_processing.py')):
-            colab_paths = [
-                '/content/Mismatch_report',
-                '/content/mismatches',
-                os.path.join(os.getcwd(), 'Mismatch_report'),
-            ]
-            for path in colab_paths:
-                if os.path.exists(os.path.join(path, 'part1_etof_file_processing.py')):
-                    script_dir = path
-                    break
-    
-    print(f"[DEBUG] Using script_dir: {script_dir}")
-    print(f"[DEBUG] Modules exist: {os.path.exists(os.path.join(script_dir, 'part1_etof_file_processing.py'))}")
     
     folders = setup_folders(script_dir)
     
     # Change to script directory
     original_cwd = os.getcwd()
     os.chdir(script_dir)
-    print(f"[DEBUG] Changed to: {os.getcwd()}")
     
     # Add to sys.path for imports
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)
-        print(f"[DEBUG] Added to sys.path: {script_dir}")
     
     try:
         # Validate inputs
@@ -292,19 +248,8 @@ def run_workflow(
                 order_files_path=order_file
             )
             log_step(4, f"Mapping completed: {mapping_df.shape[0]} rows", "success")
-            
-            # Verify the mapping file was created
-            mapping_file = os.path.join(script_dir, "partly_df", "lc_etof_mapping.xlsx")
-            if os.path.exists(mapping_file):
-                log_step(4, f"lc_etof_mapping.xlsx created successfully", "success")
-            else:
-                log_step(4, f"WARNING: lc_etof_mapping.xlsx was NOT created!", "warning")
         except Exception as e:
-            import traceback
-            log_step(4, f"Mapping failed: {e}", "error")
-            log_step(4, f"Traceback: {traceback.format_exc()}", "error")
-            # This is critical - matching step will fail without this
-            raise
+            log_step(4, f"Mapping failed: {e}", "warning")
         
         # ========================================
         # STEP 5: Vocabulary Mapping
@@ -341,38 +286,25 @@ def run_workflow(
         # ========================================
         log_step(6, "MATCHING", "section")
         try:
-            from matching import run_matching, create_lc_etof_with_comments
-            log_step(6, "Running matching process...", "info")
-            matching_file = run_matching(rate_card_file_path=rc_list[0] if rc_list else None)
-            log_step(6, f"Matching completed: {matching_file}", "success")
-            
-            # Create lc_etof_with_comments.xlsx (this is NOT called by run_matching!)
-            log_step(6, "Creating lc_etof_with_comments.xlsx...", "info")
-            try:
-                comments_file = create_lc_etof_with_comments()
-                if comments_file:
-                    log_step(6, f"lc_etof_with_comments.xlsx created: {comments_file}", "success")
-                else:
-                    log_step(6, f"WARNING: create_lc_etof_with_comments returned None", "warning")
-            except Exception as comments_err:
-                log_step(6, f"Failed to create lc_etof_with_comments.xlsx: {comments_err}", "warning")
-            
-            # Verify the file exists
-            lc_etof_comments_path = os.path.join(script_dir, "partly_df", "lc_etof_with_comments.xlsx")
-            if os.path.exists(lc_etof_comments_path):
-                log_step(6, f"Verified: lc_etof_with_comments.xlsx exists", "success")
+            from matching import run_matching_all_agreements, create_lc_etof_with_comments
+            log_step(6, "Running matching process for all agreements...", "info")
+            matching_results = run_matching_all_agreements()
+            if matching_results:
+                log_step(6, f"Matching completed: {len(matching_results)} agreement(s) matched", "success")
+                for agreement, file_path in matching_results.items():
+                    log_step(6, f"  - {agreement}: {file_path}", "info")
             else:
-                log_step(6, f"WARNING: lc_etof_with_comments.xlsx still NOT found!", "warning")
-                partly_df_path = os.path.join(script_dir, "partly_df")
-                if os.path.exists(partly_df_path):
-                    files = os.listdir(partly_df_path)
-                    log_step(6, f"  Files in partly_df: {files[:15]}", "info")
-                    
+                log_step(6, "No agreements matched", "warning")
+            
+            # Create lc_etof_with_comments.xlsx from matched files
+            log_step(6, "Creating lc_etof_with_comments.xlsx...", "info")
+            comments_file = create_lc_etof_with_comments()
+            if comments_file:
+                log_step(6, f"Created: {comments_file}", "success")
+            else:
+                log_step(6, "Failed to create lc_etof_with_comments.xlsx", "warning")
         except Exception as e:
-            import traceback
-            log_step(6, f"Matching failed: {e}", "error")
-            log_step(6, f"Traceback: {traceback.format_exc()}", "error")
-            # Don't raise - continue with workflow but conditions_checking will likely fail
+            log_step(6, f"Matching failed: {e}", "warning")
         
         # ========================================
         # STEP 7: Mismatch Report
@@ -760,13 +692,7 @@ def run_mismatch_analysis_gradio(
 
 
 # ---- Gradio UI Definition ----
-# Use theme only if supported (newer Gradio versions)
-try:
-    demo_kwargs = {"title": "Mismatch Analyzer", "theme": gr.themes.Soft()}
-except AttributeError:
-    demo_kwargs = {"title": "Mismatch Analyzer"}
-
-with gr.Blocks(**demo_kwargs) as demo:
+with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 📊 Mismatch Analyzer")
     gr.Markdown("### Analyze cost mismatches against rate cards")
     
@@ -938,4 +864,3 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
-
