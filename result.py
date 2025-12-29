@@ -25,16 +25,49 @@ from pathlib import Path
 from datetime import datetime
 
 
+def get_script_directory():
+    """Get the script directory, handling Colab and exec() environments."""
+    # Try __file__ first (normal execution)
+    try:
+        if '__file__' in globals() and __file__:
+            return os.path.dirname(os.path.abspath(__file__))
+    except:
+        pass
+    
+    # Check for Colab Mismatch_report folder
+    colab_paths = [
+        '/content/Mismatch_report',
+        '/content/mismatch_report',
+        os.path.join(os.getcwd(), 'Mismatch_report'),
+    ]
+    for path in colab_paths:
+        if os.path.exists(path) and os.path.isdir(path):
+            # Verify it has our expected files
+            if os.path.exists(os.path.join(path, 'result.py')) or os.path.exists(os.path.join(path, 'matching.py')):
+                return path
+    
+    # Check if current directory has our files
+    cwd = os.getcwd()
+    if os.path.exists(os.path.join(cwd, 'matching.py')) or os.path.exists(os.path.join(cwd, 'result.py')):
+        return cwd
+    
+    # Last resort
+    return cwd
+
+
 def setup_python_path():
     """Setup Python path to include the script directory for imports."""
     try:
-        if '__file__' in globals():
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-        else:
-            script_dir = os.getcwd()
+        script_dir = get_script_directory()
         
         if script_dir and script_dir not in sys.path:
             sys.path.insert(0, script_dir)
+            print(f"📁 Added to Python path: {script_dir}")
+        
+        # Change to script directory for relative imports
+        if script_dir and os.getcwd() != script_dir:
+            os.chdir(script_dir)
+            print(f"📁 Changed working directory to: {script_dir}")
             
     except Exception as e:
         print(f"⚠️ Warning: Could not auto-detect script directory: {e}")
@@ -153,20 +186,20 @@ def run_workflow(
     
     # Setup folders
     if script_dir is None:
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-        except:
-            script_dir = os.getcwd()
+        script_dir = get_script_directory()
     
     folders = setup_folders(script_dir)
     
     # Change to script directory
     original_cwd = os.getcwd()
-    os.chdir(script_dir)
+    if os.getcwd() != script_dir:
+        os.chdir(script_dir)
+        print(f"   Changed to script directory: {script_dir}")
     
     # Add to sys.path for imports
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)
+        print(f"   Added to Python path: {script_dir}")
     
     try:
         # Validate inputs
@@ -510,10 +543,7 @@ def run_mismatch_analysis_gradio(
     log_status("✅ Validation passed. Starting workflow...", "info")
     
     # Create directories
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        script_dir = os.getcwd()
+    script_dir = get_script_directory()
     
     input_dir = os.path.join(script_dir, "input")
     output_dir = os.path.join(script_dir, "output")
@@ -630,8 +660,8 @@ def run_mismatch_analysis_gradio(
             log_status(f"⚠️ Result file path returned but file doesn't exist: {result_file}", "warning")
             # Try to find the result file in expected locations
             possible_paths = [
-                os.path.join(result_dir, "result.xlsx"),
-                os.path.join(script_dir, "result", "result.xlsx"),
+                os.path.join(output_dir, "result.xlsx"),
+                os.path.join(script_dir, "output", "result.xlsx"),
                 os.path.join(partly_df_dir, "conditions_checked.xlsx"),
             ]
             for path in possible_paths:
@@ -839,10 +869,7 @@ with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
 
 if __name__ == "__main__":
     # Create folders when program starts
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        script_dir = os.getcwd()
+    script_dir = get_script_directory()
     
     input_dir = os.path.join(script_dir, "input")
     output_dir = os.path.join(script_dir, "output")
@@ -868,4 +895,3 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
-
