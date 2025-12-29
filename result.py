@@ -256,8 +256,8 @@ def run_workflow(
         # ========================================
         log_step(5, "VOCABULARY MAPPING", "section")
         try:
-            from vocabular import map_and_rename_columns
-            log_step(5, "Running vocabulary mapping...", "info")
+            from vocabular import process_all_rate_cards_from_mapping_file
+            log_step(5, "Running vocabulary mapping for all agreements...", "info")
             
             # Parse ignore columns
             ignore_cols = None
@@ -267,19 +267,23 @@ def run_workflow(
                 else:
                     ignore_cols = ignore_rate_card_columns
             
-            lc_input_param = lc_list if len(lc_list) > 1 else lc_list[0]
-            vocab_result = map_and_rename_columns(
-                rate_card_file_path=rc_list[0] if rc_list else None,
-                etof_file_path=etof_file,
-                order_files_path=order_file,
-                lc_input_path=lc_input_param,
-                shipper_id=shipper_name,
-                output_txt_path="column_mapping_results.txt",
-                ignore_rate_card_columns=ignore_cols
+            # Use lc_etof_mapping.xlsx (created in Step 4) to process all agreements
+            vocab_results = process_all_rate_cards_from_mapping_file(
+                mapping_filename="lc_etof_mapping.xlsx",
+                ignore_rate_card_columns=ignore_cols,
+                shipper_id=shipper_name
             )
-            log_step(5, "Vocabulary mapping completed", "success")
+            
+            if vocab_results:
+                log_step(5, f"Vocabulary mapping completed: {len(vocab_results)} agreement(s)", "success")
+                for agreement in vocab_results.keys():
+                    log_step(5, f"  - {agreement}_vocabulary_mapping.xlsx", "info")
+            else:
+                log_step(5, "No vocabulary mappings created", "warning")
         except Exception as e:
             log_step(5, f"Vocabulary mapping failed: {e}", "warning")
+            import traceback
+            traceback.print_exc()
         
         # ========================================
         # STEP 6: Matching
@@ -859,7 +863,7 @@ if __name__ == "__main__":
     
     if in_colab:
         print("🚀 Launching Gradio interface for Google Colab...")
-        demo.launch(server_name="0.0.0.0", share=False, debug=True, show_error=True)
+        demo.launch(server_name="0.0.0.0", share=False, debug=False, show_error=True)
     else:
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
