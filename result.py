@@ -171,6 +171,14 @@ def run_workflow(
     try:
         # Validate inputs
         log_step(0, "Validating inputs...", "info")
+        log_step(0, f"  etof_file: {etof_file}", "info")
+        log_step(0, f"  lc_files: {lc_files}", "info")
+        log_step(0, f"  rate_card_files: {rate_card_files}", "info")
+        log_step(0, f"  mismatch_file: {mismatch_file}", "info")
+        log_step(0, f"  shipper_name: {shipper_name}", "info")
+        log_step(0, f"  Current dir: {os.getcwd()}", "info")
+        log_step(0, f"  Input folder contents: {os.listdir('input') if os.path.exists('input') else 'NOT FOUND'}", "info")
+        
         validation_errors = validate_inputs(etof_file, lc_files, rate_card_files, mismatch_file, shipper_name)
         
         if validation_errors:
@@ -559,6 +567,7 @@ def run_mismatch_analysis_gradio(
         return None, error_msg
     
     # Run the workflow
+    final_file_path = None
     try:
         log_status("🚀 Starting mismatch analysis workflow...", "info")
         
@@ -569,6 +578,12 @@ def run_mismatch_analysis_gradio(
         
         # Prepare LC files parameter
         lc_param = lc_filenames if len(lc_filenames) > 1 else (lc_filenames[0] if lc_filenames else None)
+        
+        log_status(f"   ETOF: {etof_filename}", "info")
+        log_status(f"   LC: {lc_param}", "info")
+        log_status(f"   Rate Cards: {rate_card_filenames}", "info")
+        log_status(f"   Mismatch: {mismatch_filename}", "info")
+        log_status(f"   Shipper: {shipper_name.strip()}", "info")
         
         # Run the workflow
         result_file = run_workflow(
@@ -583,6 +598,8 @@ def run_mismatch_analysis_gradio(
             script_dir=script_dir
         )
         
+        log_status(f"   Workflow returned: {result_file}", "info")
+        
         if result_file and os.path.exists(result_file):
             log_status(f"✅ Workflow completed successfully!", "info")
             log_status(f"📁 Result file: {result_file}", "info")
@@ -592,16 +609,29 @@ def run_mismatch_analysis_gradio(
             shutil.copy2(result_file, output_result)
             
             final_file_path = output_result
+        elif result_file:
+            log_status(f"⚠️ Result file path returned but file doesn't exist: {result_file}", "warning")
+            # Try to find the result file in expected locations
+            possible_paths = [
+                os.path.join(result_dir, "result.xlsx"),
+                os.path.join(script_dir, "result", "result.xlsx"),
+                os.path.join(partly_df_dir, "conditions_checked.xlsx"),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    log_status(f"   Found result at: {path}", "info")
+                    output_result = os.path.join(output_dir, "Result.xlsx")
+                    shutil.copy2(path, output_result)
+                    final_file_path = output_result
+                    break
         else:
-            log_status("⚠️ Workflow completed but no result file generated", "warning")
-            final_file_path = None
+            log_status("⚠️ Workflow returned None - check error messages above", "warning")
             
     except Exception as e:
         import traceback
         error_msg = f"❌ Workflow failed: {e}"
         log_status(error_msg, "error")
         log_status(f"Traceback: {traceback.format_exc()}", "error")
-        final_file_path = None
     
     # Prepare status summary
     status_summary = []
