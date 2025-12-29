@@ -292,8 +292,19 @@ def run_workflow(
                 order_files_path=order_file
             )
             log_step(4, f"Mapping completed: {mapping_df.shape[0]} rows", "success")
+            
+            # Verify the mapping file was created
+            mapping_file = os.path.join(script_dir, "partly_df", "lc_etof_mapping.xlsx")
+            if os.path.exists(mapping_file):
+                log_step(4, f"lc_etof_mapping.xlsx created successfully", "success")
+            else:
+                log_step(4, f"WARNING: lc_etof_mapping.xlsx was NOT created!", "warning")
         except Exception as e:
-            log_step(4, f"Mapping failed: {e}", "warning")
+            import traceback
+            log_step(4, f"Mapping failed: {e}", "error")
+            log_step(4, f"Traceback: {traceback.format_exc()}", "error")
+            # This is critical - matching step will fail without this
+            raise
         
         # ========================================
         # STEP 5: Vocabulary Mapping
@@ -330,12 +341,38 @@ def run_workflow(
         # ========================================
         log_step(6, "MATCHING", "section")
         try:
-            from matching import run_matching
+            from matching import run_matching, create_lc_etof_with_comments
             log_step(6, "Running matching process...", "info")
             matching_file = run_matching(rate_card_file_path=rc_list[0] if rc_list else None)
             log_step(6, f"Matching completed: {matching_file}", "success")
+            
+            # Create lc_etof_with_comments.xlsx (this is NOT called by run_matching!)
+            log_step(6, "Creating lc_etof_with_comments.xlsx...", "info")
+            try:
+                comments_file = create_lc_etof_with_comments()
+                if comments_file:
+                    log_step(6, f"lc_etof_with_comments.xlsx created: {comments_file}", "success")
+                else:
+                    log_step(6, f"WARNING: create_lc_etof_with_comments returned None", "warning")
+            except Exception as comments_err:
+                log_step(6, f"Failed to create lc_etof_with_comments.xlsx: {comments_err}", "warning")
+            
+            # Verify the file exists
+            lc_etof_comments_path = os.path.join(script_dir, "partly_df", "lc_etof_with_comments.xlsx")
+            if os.path.exists(lc_etof_comments_path):
+                log_step(6, f"Verified: lc_etof_with_comments.xlsx exists", "success")
+            else:
+                log_step(6, f"WARNING: lc_etof_with_comments.xlsx still NOT found!", "warning")
+                partly_df_path = os.path.join(script_dir, "partly_df")
+                if os.path.exists(partly_df_path):
+                    files = os.listdir(partly_df_path)
+                    log_step(6, f"  Files in partly_df: {files[:15]}", "info")
+                    
         except Exception as e:
-            log_step(6, f"Matching failed: {e}", "warning")
+            import traceback
+            log_step(6, f"Matching failed: {e}", "error")
+            log_step(6, f"Traceback: {traceback.format_exc()}", "error")
+            # Don't raise - continue with workflow but conditions_checking will likely fail
         
         # ========================================
         # STEP 7: Mismatch Report
@@ -896,7 +933,7 @@ if __name__ == "__main__":
     
     if in_colab:
         print("🚀 Launching Gradio interface for Google Colab...")
-        demo.launch(server_name="0.0.0.0", share=False, debug=True, show_error=True)
+        demo.launch(server_name="0.0.0.0", share=False, debug=False, show_error=True)
     else:
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
