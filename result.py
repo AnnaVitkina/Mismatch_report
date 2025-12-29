@@ -86,8 +86,7 @@ def setup_folders(script_dir):
     folders = {
         'input': Path(script_dir) / 'input',
         'output': Path(script_dir) / 'output',
-        'partly_df': Path(script_dir) / 'partly_df',
-        'result': Path(script_dir) / 'result'
+        'partly_df': Path(script_dir) / 'partly_df'
     }
     
     for name, folder in folders.items():
@@ -547,12 +546,10 @@ def run_mismatch_analysis_gradio(
     
     input_dir = os.path.join(script_dir, "input")
     output_dir = os.path.join(script_dir, "output")
-    result_dir = os.path.join(script_dir, "result")
     partly_df_dir = os.path.join(script_dir, "partly_df")
     
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(result_dir, exist_ok=True)
     os.makedirs(partly_df_dir, exist_ok=True)
     
     # Copy uploaded files to input directory
@@ -873,17 +870,14 @@ if __name__ == "__main__":
     
     input_dir = os.path.join(script_dir, "input")
     output_dir = os.path.join(script_dir, "output")
-    result_dir = os.path.join(script_dir, "result")
     partly_df_dir = os.path.join(script_dir, "partly_df")
     
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(result_dir, exist_ok=True)
     os.makedirs(partly_df_dir, exist_ok=True)
     
     print(f"📁 Input folder: {input_dir}")
     print(f"📁 Output folder: {output_dir}")
-    print(f"📁 Result folder: {result_dir}")
     
     # Check if running in Colab
     in_colab = 'google.colab' in sys.modules
