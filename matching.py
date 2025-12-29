@@ -1930,9 +1930,19 @@ def create_lc_etof_with_comments():
         matched_files[agreement] = file
         print(f"   - {agreement}: {file.name}")
     
-    if not matched_files:
+    # Also check for Matched_Shipments_with.xlsx (created by run_matching)
+    matched_shipments_file = partly_df.parent / "Matched_Shipments_with.xlsx"
+    if not matched_shipments_file.exists():
+        matched_shipments_file = partly_df / "Matched_Shipments_with.xlsx"
+    
+    if not matched_files and not matched_shipments_file.exists():
         print("   [WARNING] No matched files found. Run matching first.")
         return None
+    
+    # If no individual matched files but Matched_Shipments_with.xlsx exists, use it
+    if not matched_files and matched_shipments_file.exists():
+        print(f"   Using combined file: {matched_shipments_file.name}")
+        matched_files['_combined'] = matched_shipments_file
     
     # Step 4: Build ETOF # to comment mapping from all matched files
     print("\n4. Building ETOF # to comment mapping...")
@@ -1943,41 +1953,85 @@ def create_lc_etof_with_comments():
     
     for agreement, matched_file in matched_files.items():
         try:
-            df_matched = pd.read_excel(matched_file, sheet_name='Matched Shipments')
-            
-            # Find ETOF # column
-            etof_col = None
-            for col in df_matched.columns:
-                for var in etof_variations:
-                    if col.lower().replace(' ', '') == var.lower().replace(' ', ''):
-                        etof_col = col
-                        break
-                if etof_col:
-                    break
-            
-            if not etof_col:
-                print(f"   [WARNING] ETOF # column not found in {matched_file.name}")
-                continue
-            
-            # Check if 'comment' column exists
-            if 'comment' not in df_matched.columns:
-                print(f"   [WARNING] 'comment' column not found in {matched_file.name}")
-                continue
-            
-            agreement_etof_comments[agreement] = {}
-            
-            for _, row in df_matched.iterrows():
-                etof_val = row.get(etof_col)
-                comment_val = row.get('comment')
+            # Handle combined file (Matched_Shipments_with.xlsx) vs individual files
+            if agreement == '_combined':
+                # Read all sheets from the combined file
+                xl = pd.ExcelFile(matched_file)
+                for sheet_name in xl.sheet_names:
+                    if sheet_name.lower() in ['no agreement', 'sheet1']:
+                        continue  # Skip non-agreement sheets
+                    
+                    df_matched = pd.read_excel(matched_file, sheet_name=sheet_name)
+                    
+                    # Find ETOF # column
+                    etof_col = None
+                    for col in df_matched.columns:
+                        for var in etof_variations:
+                            if col.lower().replace(' ', '') == var.lower().replace(' ', ''):
+                                etof_col = col
+                                break
+                        if etof_col:
+                            break
+                    
+                    if not etof_col:
+                        continue
+                    
+                    # Check if 'comment' column exists
+                    if 'comment' not in df_matched.columns:
+                        continue
+                    
+                    if sheet_name not in agreement_etof_comments:
+                        agreement_etof_comments[sheet_name] = {}
+                    
+                    for _, row in df_matched.iterrows():
+                        etof_val = row.get(etof_col)
+                        comment_val = row.get('comment')
+                        
+                        if pd.notna(etof_val) and str(etof_val).strip() and str(etof_val).lower() != 'nan':
+                            etof_key = str(etof_val).strip()
+                            if pd.notna(comment_val):
+                                comment_str = str(comment_val)
+                                etof_to_comment[etof_key] = comment_str
+                                agreement_etof_comments[sheet_name][etof_key] = comment_str
+                    
+                    print(f"   - {sheet_name}: {len(agreement_etof_comments[sheet_name])} comments loaded")
+            else:
+                # Standard individual matched file
+                df_matched = pd.read_excel(matched_file, sheet_name='Matched Shipments')
                 
-                if pd.notna(etof_val) and str(etof_val).strip() and str(etof_val).lower() != 'nan':
-                    etof_key = str(etof_val).strip()
-                    if pd.notna(comment_val):
-                        comment_str = str(comment_val)
-                        etof_to_comment[etof_key] = comment_str
-                        agreement_etof_comments[agreement][etof_key] = comment_str
-            
-            print(f"   - {agreement}: {len(agreement_etof_comments[agreement])} comments loaded")
+                # Find ETOF # column
+                etof_col = None
+                for col in df_matched.columns:
+                    for var in etof_variations:
+                        if col.lower().replace(' ', '') == var.lower().replace(' ', ''):
+                            etof_col = col
+                            break
+                    if etof_col:
+                        break
+                
+                if not etof_col:
+                    print(f"   [WARNING] ETOF # column not found in {matched_file.name}")
+                    continue
+                
+                # Check if 'comment' column exists
+                if 'comment' not in df_matched.columns:
+                    print(f"   [WARNING] 'comment' column not found in {matched_file.name}")
+                    continue
+                
+                agreement_etof_comments[agreement] = {}
+                
+                for _, row in df_matched.iterrows():
+                    etof_val = row.get(etof_col)
+                    comment_val = row.get('comment')
+                    
+                    if pd.notna(etof_val) and str(etof_val).strip() and str(etof_val).lower() != 'nan':
+                        etof_key = str(etof_val).strip()
+                        if pd.notna(comment_val):
+                            comment_str = str(comment_val)
+                            etof_to_comment[etof_key] = comment_str
+                            agreement_etof_comments[agreement][etof_key] = comment_str
+                
+                print(f"   - {agreement}: {len(agreement_etof_comments[agreement])} comments loaded")
             
         except Exception as e:
             print(f"   [ERROR] Could not read {matched_file.name}: {e}")
