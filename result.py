@@ -384,8 +384,8 @@ def run_workflow(
         log_step(10, "MISMATCHES FILING", "section")
         try:
             from mismacthes_filing import main as mismatches_filing_main
-            log_step(10, "Filing mismatches...", "info")
-            filing_result = mismatches_filing_main()
+            log_step(10, f"Filing mismatches (include_positive={include_positive_discrepancy})...", "info")
+            filing_result = mismatches_filing_main(include_positive_discrepancy=include_positive_discrepancy)
             log_step(10, "Mismatches filed", "success")
         except Exception as e:
             log_step(10, f"Mismatches filing failed: {e}", "warning")
@@ -889,4 +889,5 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
+
 
