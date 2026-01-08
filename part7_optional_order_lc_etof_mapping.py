@@ -37,8 +37,12 @@ def save_dataframe_by_carrier_agreement(df, output_filename, folder_name="partly
         # Check if Carrier agreement # column exists
         if 'Carrier agreement #' in df.columns:
             # Get unique carrier agreements (excluding NaN/None/empty)
+            raw_values = df['Carrier agreement #'].unique()
+            print(f"   DEBUG: 'Carrier agreement #' column found with {len(raw_values)} unique raw values: {raw_values[:10]}{'...' if len(raw_values) > 10 else ''}")
             carrier_agreements = df['Carrier agreement #'].dropna().unique()
+            print(f"   DEBUG: After dropna: {len(carrier_agreements)} unique values: {carrier_agreements[:10]}{'...' if len(carrier_agreements) > 10 else ''}")
             carrier_agreements = [ca for ca in carrier_agreements if str(ca).strip() and str(ca).lower() != 'nan']
+            print(f"   DEBUG: After filtering empty/nan strings: {len(carrier_agreements)} values: {carrier_agreements[:10]}{'...' if len(carrier_agreements) > 10 else ''}")
             
             # Create a tab for each carrier agreement
             for carrier_agreement in sorted(carrier_agreements, key=str):
@@ -67,6 +71,8 @@ def save_dataframe_by_carrier_agreement(df, output_filename, folder_name="partly
     print(f"   Saved to: {output_path}")
     if 'Carrier agreement #' in df.columns:
         print(f"   Tabs created: All Data + {len(carrier_agreements)} carrier agreement tabs")
+    else:
+        print(f"   DEBUG: 'Carrier agreement #' column NOT found in dataframe. Available columns: {df.columns.tolist()}")
     
     return str(output_path)
 
@@ -158,7 +164,7 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     Also renames "Order file #" column to "LC #".
     
     Args:
-        etof_dataframe: DataFrame with "ETOF #" column and optionally "LC #", "SHIPMENT_ID", and "Carrier agreement #" columns
+        etof_dataframe: DataFrame with "ETOF #" column and optionally "LC #", "SHIPMENT_ID" (or "SHIPMENT ID(s)"), and "Carrier agreement #" columns
         lc_dataframe_updated: DataFrame with "Order file #" column (from previous mapping) and optionally "SHIPMENT_ID"
     
     Returns:
@@ -175,13 +181,21 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     
     # Check if Carrier agreement # column exists in ETOF
     has_carrier_agreement = 'Carrier agreement #' in etof_dataframe.columns
+    print(f"   DEBUG ETOF columns: {etof_dataframe.columns.tolist()}")
+    print(f"   DEBUG LC columns: {lc_dataframe_final.columns.tolist()}")
+    print(f"   DEBUG has_carrier_agreement in ETOF: {has_carrier_agreement}")
     
     # Check if SHIPMENT_ID is present in both dataframes
-    has_shipment_id_etof = 'SHIPMENT_ID' or 'SHIPMENT ID(S)' in etof_dataframe.columns
+    has_shipment_id_etof = 'SHIPMENT_ID' in etof_dataframe.columns or 'SHIPMENT ID(s)' in etof_dataframe.columns
     has_shipment_id_lc = 'SHIPMENT_ID' in lc_dataframe_final.columns
     use_shipment_id = has_shipment_id_etof and has_shipment_id_lc
+    print(f"   DEBUG has_shipment_id_etof: {has_shipment_id_etof}, has_shipment_id_lc: {has_shipment_id_lc}, use_shipment_id: {use_shipment_id}")
     
     if use_shipment_id:
+        # Determine which SHIPMENT_ID column name exists in ETOF
+        etof_shipment_col = 'SHIPMENT_ID' if 'SHIPMENT_ID' in etof_dataframe.columns else 'SHIPMENT ID(s)'
+        print(f"   DEBUG using ETOF shipment column: '{etof_shipment_col}'")
+        
         # Use SHIPMENT_ID for mapping
         # Create mapping dictionaries: SHIPMENT_ID (from ETOF) -> ETOF #, LC #, and Carrier agreement #
         shipment_to_etof = {}
@@ -189,12 +203,12 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         shipment_to_carrier_agreement = {}
         
         for _, row in etof_dataframe.iterrows():
-            shipment_id = str(row.get('SHIPMENT_ID', '')).strip()
+            shipment_id = str(row.get(etof_shipment_col, '')).strip()
             etof_value = str(row.get('ETOF #', '')).strip()
             lc_value = str(row.get('LC #', '')).strip() if 'LC #' in etof_dataframe.columns else None
             carrier_agreement_value = str(row.get('Carrier agreement #', '')).strip() if has_carrier_agreement else None
             
-            if pd.notna(row.get('SHIPMENT_ID')) and shipment_id and shipment_id.lower() != 'nan':
+            if pd.notna(row.get(etof_shipment_col)) and shipment_id and shipment_id.lower() != 'nan':
                 if pd.notna(row.get('ETOF #')) and etof_value and etof_value.lower() != 'nan':
                     # Map SHIPMENT_ID (key) to ETOF # (value)
                     shipment_to_etof[shipment_id] = etof_value
@@ -206,6 +220,16 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
                 if carrier_agreement_value and pd.notna(row.get('Carrier agreement #')) and carrier_agreement_value.lower() != 'nan':
                     # Map SHIPMENT_ID (key) to Carrier agreement # (value)
                     shipment_to_carrier_agreement[shipment_id] = carrier_agreement_value
+        
+        print(f"   DEBUG shipment_to_etof mappings created: {len(shipment_to_etof)}")
+        print(f"   DEBUG shipment_to_carrier_agreement mappings: {len(shipment_to_carrier_agreement)}")
+        if shipment_to_etof:
+            sample_keys = list(shipment_to_etof.keys())[:3]
+            print(f"   DEBUG sample ETOF SHIPMENT_IDs (keys): {sample_keys}")
+        
+        # Show sample LC SHIPMENT_IDs
+        lc_shipment_ids = lc_dataframe_final['SHIPMENT_ID'].dropna().unique()[:5].tolist()
+        print(f"   DEBUG sample LC SHIPMENT_IDs: {lc_shipment_ids}")
         
         # Map ETOF # values by matching SHIPMENT_ID
         def find_etof_number_by_shipment(row):
@@ -230,6 +254,8 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         
         # Apply mappings
         lc_dataframe_final['ETOF #'] = lc_dataframe_final.apply(find_etof_number_by_shipment, axis=1)
+        matched_count = lc_dataframe_final['ETOF #'].notna().sum()
+        print(f"   DEBUG rows with ETOF # after mapping: {matched_count} / {len(lc_dataframe_final)}")
         
         # Map Carrier agreement # from ETOF if available
         if has_carrier_agreement:
@@ -268,6 +294,16 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
                     # Map LC # (key) to Carrier agreement # (value)
                     lc_to_carrier_agreement[lc_value] = carrier_agreement_value
         
+        print(f"   DEBUG lc_to_etof mappings created: {len(lc_to_etof)}")
+        print(f"   DEBUG lc_to_carrier_agreement mappings: {len(lc_to_carrier_agreement)}")
+        if lc_to_etof:
+            sample_keys = list(lc_to_etof.keys())[:3]
+            print(f"   DEBUG sample ETOF LC # (keys): {sample_keys}")
+        
+        # Show sample Order file # values from LC dataframe
+        order_file_nums = lc_dataframe_final['Order file #'].dropna().unique()[:5].tolist()
+        print(f"   DEBUG sample LC 'Order file #' values: {order_file_nums}")
+        
         # Map ETOF # values by matching Order file # from LC dataframe with LC # from ETOF file
         def find_etof_number_by_lc(row):
             order_file_number = str(row.get('Order file #', '')).strip()
@@ -285,6 +321,8 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         
         # Apply mappings
         lc_dataframe_final['ETOF #'] = lc_dataframe_final.apply(find_etof_number_by_lc, axis=1)
+        matched_count = lc_dataframe_final['ETOF #'].notna().sum()
+        print(f"   DEBUG rows with ETOF # after LC # mapping: {matched_count} / {len(lc_dataframe_final)}")
         
         # Map Carrier agreement # from ETOF if available
         if has_carrier_agreement:
@@ -387,7 +425,7 @@ def process_order_lc_etof_mapping(lc_input_path, etof_path, order_files_path=Non
 
 if __name__ == "__main__":
     lc_input_path = "LC.xml"
-    etof_path = "etofs.xlsx"
+    etof_path = "etofs_1.xlsx"
     
     # If order_files_path is provided, it will use order file mapping logic
     # If not provided (None), it will use SHIPMENT_ID mapping
@@ -398,5 +436,4 @@ if __name__ == "__main__":
         etof_path, 
         #order_files_path=order_files_path
     )
-
 
