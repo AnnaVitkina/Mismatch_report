@@ -177,7 +177,7 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     has_carrier_agreement = 'Carrier agreement #' in etof_dataframe.columns
     
     # Check if SHIPMENT_ID is present in both dataframes
-    has_shipment_id_etof = 'SHIPMENT_ID' in etof_dataframe.columns
+    has_shipment_id_etof = 'SHIPMENT_ID' or 'SHIPMENT ID(S)' in etof_dataframe.columns
     has_shipment_id_lc = 'SHIPMENT_ID' in lc_dataframe_final.columns
     use_shipment_id = has_shipment_id_etof and has_shipment_id_lc
     
@@ -398,4 +398,5 @@ if __name__ == "__main__":
         etof_path, 
         #order_files_path=order_files_path
     )
+
 
