@@ -23,8 +23,8 @@ Logic:
      - Check Rate By Condition:
        a) If "PER SHIPMENT":
           - Find matching ETOF # in lc_etof_with_comments
-          - Extract rate lane from "comment" column
-          - Find Price Flat for the cost type
+       - Extract rate lane from "comment" column
+       - Find Price Flat for the cost type
           - Reason: "The cost is pre-calculated by rate card - X flat."
        b) All other Rate By cases:
           - Find matching ETOF # in lc_etof_with_comments
@@ -1130,6 +1130,84 @@ def check_applies_if_condition(conditions, etof_number, df_lc_etof_row, debug=Fa
     return True, None
 
 
+def parse_rounding_rule(rate_by_text):
+    """
+    Parse rounding rule from Rate By text.
+    
+    Examples:
+    - "Rate by: Weight/chargeable kg (Rounding: Upper To 100)" -> ("upper", 100)
+    - "Rate by: Weight/kg (Rounding: Lower To 50)" -> ("lower", 50)
+    - "Rate by: Weight/kg" -> (None, None) - no rounding
+    
+    Returns:
+        tuple: (direction, value) where direction is "upper" or "lower", value is the rounding increment
+               Returns (None, None) if no rounding rule found
+    """
+    if not rate_by_text:
+        return None, None
+    
+    rate_by_str = str(rate_by_text).lower()
+    
+    # Look for "upper to X" or "lower to X" patterns
+    import re
+    
+    # Try to find "upper to X" pattern
+    upper_match = re.search(r'upper\s*to\s*(\d+)', rate_by_str)
+    if upper_match:
+        return "upper", int(upper_match.group(1))
+    
+    # Try to find "lower to X" pattern
+    lower_match = re.search(r'lower\s*to\s*(\d+)', rate_by_str)
+    if lower_match:
+        return "lower", int(lower_match.group(1))
+    
+    return None, None
+
+
+def apply_rounding_to_weight(weight_value, rounding_direction, rounding_value, debug=False):
+    """
+    Apply rounding rule to a weight value.
+    
+    Args:
+        weight_value: The original weight (float or int)
+        rounding_direction: "upper" (round up) or "lower" (round down)
+        rounding_value: The rounding increment (e.g., 100 means round to nearest 100)
+        debug: If True, print debug info
+    
+    Examples:
+        - apply_rounding_to_weight(150, "upper", 100) -> 200
+        - apply_rounding_to_weight(201, "upper", 100) -> 300
+        - apply_rounding_to_weight(150, "lower", 100) -> 100
+        - apply_rounding_to_weight(201, "lower", 100) -> 200
+    
+    Returns:
+        float: The rounded weight value
+    """
+    if rounding_direction is None or rounding_value is None or rounding_value <= 0:
+        return weight_value
+    
+    try:
+        weight = float(weight_value)
+    except (ValueError, TypeError):
+        return weight_value
+    
+    import math
+    
+    if rounding_direction == "upper":
+        # Round up to the nearest rounding_value
+        rounded = math.ceil(weight / rounding_value) * rounding_value
+    elif rounding_direction == "lower":
+        # Round down to the nearest rounding_value
+        rounded = math.floor(weight / rounding_value) * rounding_value
+    else:
+        rounded = weight
+    
+    if debug:
+        print(f"      [DEBUG] Rounding applied: {weight} -> {rounded} ({rounding_direction} to {rounding_value})")
+    
+    return rounded
+
+
 def extract_rate_by_column_keyword(rate_by_text):
     """
     Extract the column keyword from a Rate By text for direct column lookup.
@@ -1711,7 +1789,7 @@ def find_cost_price_in_rate_data(df_rate_data, lane_number, cost_type, price_typ
                     print(f"      [DEBUG] No column after cost column")
                 reason = f"No price column found after cost '{cost_type}'"
                 return (None, None, reason) if return_reason else (None, None)
-            
+    
             price_col_name = columns_list[price_col_idx]
     
     if debug:
@@ -2292,6 +2370,13 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                             if multiplier_value is not None and not (isinstance(multiplier_value, float) and pd.isna(multiplier_value)):
                                 try:
                                     multiplier_float = float(multiplier_value)
+                                    
+                                    # Apply rounding rule if present in rate_by
+                                    rounding_dir, rounding_val = parse_rounding_rule(rate_by)
+                                    original_multiplier = multiplier_float
+                                    if rounding_dir and rounding_val:
+                                        multiplier_float = apply_rounding_to_weight(multiplier_float, rounding_dir, rounding_val, debug=row_debug)
+                                    
                                     total_cost = price_float * multiplier_float
                                     
                                     # Check MIN price (if accessorial has MIN Flat)
@@ -2301,16 +2386,18 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                                             min_price_float = float(min_price)
                                             if total_cost < min_price_float:
                                                 min_applied = True
-                                                reason = f"MIN price applied (accessorial) - {min_price} (Calculated: {price_per_unit} * {multiplier_value} ({multiplier_name}) = {total_cost:.2f}, but MIN is higher)"
+                                                rounding_info = f" (rounded {original_multiplier} -> {multiplier_float})" if rounding_dir else ""
+                                                reason = f"MIN price applied (accessorial) - {min_price} (Calculated: {price_per_unit} * {multiplier_float}{rounding_info} ({multiplier_name}) = {total_cost:.2f}, but MIN is higher)"
                                                 if row_debug:
                                                     print(f"   [DEBUG] Accessorial MIN price applied: {min_price} > calculated {total_cost:.2f}")
                                         except (ValueError, TypeError):
                                             pass
                                     
                                     if not min_applied:
-                                        reason = f"Cost per unit (accessorial): {price_per_unit}, {multiplier_name}: {multiplier_value}, Total: {price_per_unit} * {multiplier_value} = {total_cost:.2f}"
+                                        rounding_info = f" (rounded from {original_multiplier})" if rounding_dir and original_multiplier != multiplier_float else ""
+                                        reason = f"Cost per unit (accessorial): {price_per_unit}, {multiplier_name}: {multiplier_float}{rounding_info}, Total: {price_per_unit} * {multiplier_float} = {total_cost:.2f}"
                                         if row_debug:
-                                            print(f"   [DEBUG] Accessorial calculated: {price_per_unit} * {multiplier_value} = {total_cost:.2f}")
+                                            print(f"   [DEBUG] Accessorial calculated: {price_per_unit} * {multiplier_float} = {total_cost:.2f}")
                                 except (ValueError, TypeError):
                                     reason = f"Cost per unit (accessorial): {price_per_unit}, {multiplier_name}: {multiplier_value} (could not calculate - invalid multiplier value)"
                                     if row_debug:
@@ -2392,11 +2479,23 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                                         if multiplier_value is not None and not (isinstance(multiplier_value, float) and pd.isna(multiplier_value)):
                                             try:
                                                 multiplier_float = float(multiplier_value)
+                                                
+                                                # Apply rounding rule if present in rate_by
+                                                rounding_dir, rounding_val = parse_rounding_rule(rate_by)
+                                                original_multiplier = multiplier_float
+                                                if rounding_dir and rounding_val:
+                                                    multiplier_float = apply_rounding_to_weight(multiplier_float, rounding_dir, rounding_val, debug=row_debug)
+                                                
                                                 total_cost = price_float * multiplier_float
                                                 
                                                 # Check if MIN or MAX price applies
                                                 min_applied = False
                                                 max_applied = False
+                                                
+                                                # Build rounding info string for reason
+                                                rounding_info_str = ""
+                                                if rounding_dir and original_multiplier != multiplier_float:
+                                                    rounding_info_str = f" (rounded {original_multiplier} -> {multiplier_float})"
                                                 
                                                 # Check MIN price
                                                 if min_price is not None:
@@ -2404,7 +2503,7 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                                                         min_price_float = float(min_price)
                                                         if total_cost < min_price_float:
                                                             min_applied = True
-                                                            reason = f"MIN price applied - {min_price} (Calculated: {price_per_unit} * {multiplier_value} ({multiplier_name}) = {total_cost:.2f}, but MIN is higher)"
+                                                            reason = f"MIN price applied - {min_price} (Calculated: {price_per_unit} * {multiplier_float}{rounding_info_str} ({multiplier_name}) = {total_cost:.2f}, but MIN is higher)"
                                                             if row_debug:
                                                                 print(f"   [DEBUG] MIN price applied: {min_price} > calculated {total_cost:.2f}")
                                                     except (ValueError, TypeError):
@@ -2416,7 +2515,7 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                                                         max_price_float = float(max_price)
                                                         if total_cost > max_price_float:
                                                             max_applied = True
-                                                            reason = f"MAX price applied - {max_price} (Calculated: {price_per_unit} * {multiplier_value} ({multiplier_name}) = {total_cost:.2f}, but MAX is lower)"
+                                                            reason = f"MAX price applied - {max_price} (Calculated: {price_per_unit} * {multiplier_float}{rounding_info_str} ({multiplier_name}) = {total_cost:.2f}, but MAX is lower)"
                                                             if row_debug:
                                                                 print(f"   [DEBUG] MAX price applied: {max_price} < calculated {total_cost:.2f}")
                                                     except (ValueError, TypeError):
@@ -2427,9 +2526,9 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                                                     tier_info = ""
                                                     if price_col and ('<=' in str(price_col) or '>' in str(price_col)):
                                                         tier_info = f" (weight tier: {price_col})"
-                                                    reason = f"Cost per unit: {price_per_unit}{tier_info}, {multiplier_name}: {multiplier_value}, Total: {price_per_unit} * {multiplier_value} = {total_cost:.2f}"
+                                                    reason = f"Cost per unit: {price_per_unit}{tier_info}, {multiplier_name}: {multiplier_float}{rounding_info_str}, Total: {price_per_unit} * {multiplier_float} = {total_cost:.2f}"
                                                     if row_debug:
-                                                        print(f"   [DEBUG] Calculated: {price_per_unit} * {multiplier_value} = {total_cost:.2f}")
+                                                        print(f"   [DEBUG] Calculated: {price_per_unit} * {multiplier_float} = {total_cost:.2f}")
                                             except (ValueError, TypeError):
                                                 reason = f"Cost per unit: {price_per_unit}, {multiplier_name}: {multiplier_value} (could not calculate - invalid multiplier value)"
                                         else:
