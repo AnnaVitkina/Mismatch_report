@@ -151,7 +151,7 @@ def check_if_row_is_conditions_row(row_values):
     return False
 
 
-def extract_cost_columns(sheet, first_cost_idx, cost_row, applies_if_row, rate_by_row, min_row, type_row):
+def extract_cost_columns(sheet, first_cost_idx, cost_row, cost_row_idx, applies_if_row, rate_by_row, min_row, type_row):
     """
     Extract CostColumn objects for each cost type.
     
@@ -159,6 +159,7 @@ def extract_cost_columns(sheet, first_cost_idx, cost_row, applies_if_row, rate_b
         sheet: Worksheet object
         first_cost_idx: Index of first cost column
         cost_row: Row with cost names
+        cost_row_idx: Row index of the cost names row
         applies_if_row: Row with "Applies if..." conditions
         rate_by_row: Row with "Rate by:..." descriptions
         min_row: Row with MIN indicators
@@ -171,6 +172,26 @@ def extract_cost_columns(sheet, first_cost_idx, cost_row, applies_if_row, rate_b
     current_cost = None
     max_col = len(type_row)
     
+    # DEBUG: Show what we're working with
+    print(f"\n   DEBUG extract_cost_columns:")
+    print(f"      first_cost_idx: {first_cost_idx}")
+    print(f"      max_col (from type_row): {max_col}")
+    print(f"      cost_row length: {len(cost_row)}")
+    print(f"      type_row length: {len(type_row)}")
+    
+    # Find all Currency columns first
+    currency_cols = []
+    for col_idx in range(first_cost_idx, max_col):
+        col_type = type_row[col_idx] if col_idx < len(type_row) else None
+        col_type_str = str(col_type).strip().lower() if col_type else ''
+        if col_type_str == 'currency':
+            cost_name = cost_row[col_idx] if col_idx < len(cost_row) else None
+            currency_cols.append((col_idx, col_type_str, cost_name))
+    
+    print(f"      Found {len(currency_cols)} 'Currency' columns:")
+    for col_idx, col_type, cost_name in currency_cols:
+        print(f"         Col {col_idx}: type='{col_type}', cost_name='{cost_name}' (type: {type(cost_name).__name__})")
+    
     for col_idx in range(first_cost_idx, max_col):
         cost_name_full = cost_row[col_idx] if col_idx < len(cost_row) else None
         applies_if = applies_if_row[col_idx] if col_idx < len(applies_if_row) else None
@@ -181,22 +202,215 @@ def extract_cost_columns(sheet, first_cost_idx, cost_row, applies_if_row, rate_b
         col_type_str = str(col_type).strip().lower() if col_type else ''
         min_str = str(min_indicator).strip().upper() if min_indicator else ''
         
+        # Initialize found values for Strategy 4
+        found_rate_by = None
+        found_applies_if = None
+        
         # Check if this is a new cost (Currency column with cost name)
-        if col_type_str == 'currency' and cost_name_full and str(cost_name_full).strip():
+        is_currency = col_type_str == 'currency'
+        
+        # Check if we have a valid cost name (not a rounding rule or other non-cost text)
+        has_cost_name = False
+        if cost_name_full and str(cost_name_full).strip():
+            cost_name_lower = str(cost_name_full).strip().lower()
+            # Skip rounding rules and other non-cost text
+            invalid_cost_patterns = ('rounding', 'upper to', 'lower to', 'round', 'rule')
+            if not any(pattern in cost_name_lower for pattern in invalid_cost_patterns):
+                has_cost_name = True
+            else:
+                print(f"      Col {col_idx}: Skipping invalid cost name: '{cost_name_full}'")
+        
+        # If Currency column but no cost name at this exact column,
+        # search for a cost name in nearby columns and rows
+        if is_currency and not has_cost_name:
+            print(f"      Col {col_idx}: CURRENCY found but no cost name at this col, searching...")
+            
+            # Patterns to skip (conditions, not cost names)
+            skip_patterns = ('rate by', 'applies if', 'apply if', 'condition', '<=', '>=', '<', '>', 
+                            'lane #', 'lane', 'origin', 'destination', 'province', 
+                            'country', 'city', 'postal', 'airport', 'region', 'currency', 'flat', 'p/unit', 'p/100',
+                            'rounding', 'upper to', 'lower to', 'round')
+            
+            # Strategy 1: Look in previous columns in the same row (up to 10 back)
+            for back_idx in range(col_idx - 1, max(0, col_idx - 11), -1):
+                potential_name = cost_row[back_idx] if back_idx < len(cost_row) else None
+                if potential_name and str(potential_name).strip():
+                    potential_str = str(potential_name).strip().lower()
+                    # Skip header-like values and conditions
+                    if not any(skip in potential_str for skip in skip_patterns):
+                        cost_name_full = potential_name
+                        has_cost_name = True
+                        print(f"         Strategy 1: Found cost name at col {back_idx}: '{cost_name_full}'")
+                        break
+            
+            # Strategy 2: If still not found, look in the row ABOVE cost_row at this column position
+            if not has_cost_name:
+                # We need to check a row above the cost_row
+                # Get row above from sheet
+                try:
+                    cost_row_above = get_row_values(sheet, cost_row_idx - 1) if cost_row_idx else []
+                    if cost_row_above and col_idx < len(cost_row_above):
+                        potential_name = cost_row_above[col_idx]
+                        if potential_name and str(potential_name).strip():
+                            potential_str = str(potential_name).strip().lower()
+                            # Skip conditions and headers
+                            if not any(skip in potential_str for skip in skip_patterns):
+                                cost_name_full = potential_name
+                                has_cost_name = True
+                                print(f"         Strategy 2: Found cost name in row above at col {col_idx}: '{cost_name_full}'")
+                except:
+                    pass
+            
+            # Strategy 3: Search entire cost_row for any non-header text that could be the cost name
+            if not has_cost_name:
+                for search_idx in range(len(cost_row)):
+                    potential_name = cost_row[search_idx]
+                    if potential_name and str(potential_name).strip():
+                        potential_str = str(potential_name).strip().lower()
+                        
+                        # Skip values that look like conditions, not cost names
+                        if any(skip in potential_str for skip in skip_patterns):
+                            continue
+                        
+                        # Look for something that looks like a cost name (contains "cost", "fee", "charge", etc.)
+                        cost_keywords = ('cost', 'fee', 'charge', 'transport', 'freight', 'delivery', 'pickup', 'surcharge')
+                        if any(kw in potential_str for kw in cost_keywords):
+                            cost_name_full = potential_name
+                            has_cost_name = True
+                            print(f"         Strategy 3: Found cost name at col {search_idx}: '{cost_name_full}'")
+                            break
+            
+            # Strategy 4: Search MULTIPLE rows above (up to 5 rows) for cost name keywords
+            # IMPORTANT: Only search in columns AT or NEAR the current column position (not entire row)
+            # Also look for "Rate by:", "Applies if", and "Rounding rule" in nearby rows
+            found_rounding_rule = None
+            
+            # First, check if the cost_row itself has rounding info at this column
+            if cost_name_full and str(cost_name_full).strip():
+                cost_name_lower = str(cost_name_full).strip().lower()
+                if 'upper to' in cost_name_lower or 'lower to' in cost_name_lower:
+                    # Extract rounding info from the cost_row
+                    rounding_text = str(cost_name_full).strip()
+                    rounding_text = rounding_text.replace('•', '').replace('\n', ' ').strip()
+                    rounding_text = ' '.join(rounding_text.split())
+                    # Extract just the "Upper to X" part
+                    import re
+                    match = re.search(r'(upper to \d+|lower to \d+)', rounding_text.lower())
+                    if match:
+                        found_rounding_rule = f"Rounding: {match.group(1).title()}"
+                        print(f"         Found Rounding in cost_row: '{found_rounding_rule}'")
+            
+            if not has_cost_name:
+                print(f"         Strategy 4: Searching rows above near column {col_idx}...")
+                
+                # Define search range: TIGHT range around current column only
+                # This prevents picking up cost names from adjacent cost types
+                search_start = max(0, col_idx - 2)
+                search_end = min(len(cost_row) if cost_row else col_idx + 5, col_idx + 5)
+                
+                for rows_back in range(1, 10):  # Search up to 10 rows back to find rounding rules
+                    try:
+                        check_row_idx = cost_row_idx - rows_back
+                        if check_row_idx < 1:
+                            break
+                        check_row = get_row_values(sheet, check_row_idx)
+                        
+                        # Search only near the current column position
+                        for search_idx in range(search_start, min(search_end, len(check_row))):
+                            potential_name = check_row[search_idx]
+                            if potential_name and str(potential_name).strip():
+                                potential_str = str(potential_name).strip().lower()
+                                
+                                # DEBUG: Print all non-empty cells found
+                                if rows_back <= 3:  # Only for first 3 rows to limit output
+                                    print(f"            Row {check_row_idx}, Col {search_idx}: '{potential_name}'")
+                                
+                                # Check for "Rate by:" - save it for later (only if near this column)
+                                if potential_str.startswith('rate by') and not found_rate_by:
+                                    found_rate_by = str(potential_name).strip()
+                                    print(f"         Strategy 4: Found Rate By in row {check_row_idx}, col {search_idx}: '{found_rate_by}'")
+                                    continue
+                                
+                                # Check for "Applies if" - save it for later
+                                if (potential_str.startswith('applies if') or potential_str.startswith('apply if')) and not found_applies_if:
+                                    found_applies_if = str(potential_name).strip()
+                                    print(f"         Strategy 4: Found Applies If in row {check_row_idx}, col {search_idx}: '{found_applies_if}'")
+                                    continue
+                                
+                                # Skip "Direct rule" - it's not useful
+                                if potential_str == 'direct rule' or potential_str.startswith('direct'):
+                                    continue
+                                
+                                # Check for "Rounding rule" or rounding indicators like "Upper to X", "Lower to X"
+                                # The actual rounding value might be "• Upper to 100" in a separate cell
+                                if 'upper to' in potential_str or 'lower to' in potential_str:
+                                    # This is the actual rounding value (e.g., "• Upper to 100")
+                                    rounding_text = str(potential_name).strip()
+                                    # Clean up: remove bullet points and extra whitespace
+                                    rounding_text = rounding_text.replace('•', '').replace('\n', ' ').strip()
+                                    rounding_text = ' '.join(rounding_text.split())  # Normalize whitespace
+                                    if rounding_text and not found_rounding_rule:
+                                        found_rounding_rule = f"Rounding: {rounding_text}"
+                                        print(f"         Strategy 4: Found Rounding Value in row {check_row_idx}, col {search_idx}: '{found_rounding_rule}'")
+                                    continue
+                                
+                                # Skip cells that just say "Rounding rule:" without the actual value
+                                if potential_str.startswith('rounding'):
+                                    continue
+                                
+                                # Skip conditions and headers (but not rounding - we handle that above)
+                                skip_check = [s for s in skip_patterns if s not in ('rounding', 'upper to', 'lower to', 'round')]
+                                if any(skip in potential_str for skip in skip_check):
+                                    continue
+                                
+                                # Look for cost keywords
+                                cost_keywords = ('cost', 'fee', 'charge', 'transport', 'freight', 'delivery', 'pickup', 'surcharge', 'national', 'international', 'package')
+                                if any(kw in potential_str for kw in cost_keywords):
+                                    cost_name_full = potential_name
+                                    has_cost_name = True
+                                    print(f"         Strategy 4: Found cost name in row {check_row_idx}, col {search_idx}: '{cost_name_full}'")
+                                    break
+                        if has_cost_name:
+                            break
+                    except:
+                        pass
+            
+            # If we found a rounding rule, append it to rate_by
+            if found_rounding_rule and found_rate_by:
+                found_rate_by = f"{found_rate_by} ({found_rounding_rule})"
+                print(f"         Combined Rate By with Rounding: '{found_rate_by}'")
+        
+        if is_currency:
+            print(f"      Col {col_idx}: CURRENCY found, cost_name='{cost_name_full}', has_cost_name={has_cost_name}")
+        
+        if is_currency and has_cost_name:
             # Save previous cost if exists
             if current_cost is not None:
                 cost_columns.append(current_cost)
             
             # Create new cost
             cost_name_clean = clean_cost_name(cost_name_full)
+            
+            # Use found rate_by/applies_if from Strategy 4 if original is empty
+            final_rate_by = str(rate_by).strip() if rate_by and str(rate_by).strip() else None
+            final_applies_if = str(applies_if).strip() if applies_if and str(applies_if).strip() else None
+            
+            if not final_rate_by and found_rate_by:
+                final_rate_by = found_rate_by
+                print(f"         -> Using Rate By from Strategy 4: '{final_rate_by}'")
+            if not final_applies_if and found_applies_if:
+                final_applies_if = found_applies_if
+                print(f"         -> Using Applies If from Strategy 4: '{final_applies_if}'")
+            
             current_cost = CostColumn(
                 name=cost_name_clean,
                 name_full=str(cost_name_full).strip(),
-                applies_if=str(applies_if).strip() if applies_if and str(applies_if).strip() else None,
-                rate_by=str(rate_by).strip() if rate_by and str(rate_by).strip() else None,
+                applies_if=final_applies_if,
+                rate_by=final_rate_by,
                 currency_col_idx=col_idx,
                 price_columns=[]
             )
+            print(f"         -> Created new cost: '{cost_name_clean}'")
         elif current_cost is not None:
             # Add price column to current cost
             if col_type_str == 'flat':
@@ -215,6 +429,8 @@ def extract_cost_columns(sheet, first_cost_idx, cost_row, applies_if_row, rate_b
     # Don't forget the last cost
     if current_cost is not None:
         cost_columns.append(current_cost)
+    
+    print(f"      Total cost_columns extracted: {len(cost_columns)}")
     
     return cost_columns
 
@@ -366,17 +582,25 @@ def create_filtered_dataframe(sheet):
     # Start checking from row above MIN (or type row if no MIN)
     start_check_row = min_row_idx - 1 if has_min_indicators else type_row_idx - 1
     
+    print(f"\n   Searching for cost names row, starting from row {start_check_row} going backwards...")
+    
     for row_idx in range(start_check_row, 2, -1):  # Go backwards, stop at row 3
         row_values = get_row_values(sheet, row_idx)
+        print(f"      Checking Row {row_idx}: first cost col values = {row_values[first_cost_idx:first_cost_idx+5] if len(row_values) > first_cost_idx else 'N/A'}")
         
         # Check if this row has condition keywords
-        if check_if_row_is_conditions_row(row_values):
+        is_conditions_row = check_if_row_is_conditions_row(row_values)
+        print(f"         is_conditions_row: {is_conditions_row}")
+        
+        if is_conditions_row:
             # This is a conditions row
             first_val = None
             for val in row_values:
                 if val is not None and str(val).strip():
                     first_val = str(val).strip().lower()
                     break
+            
+            print(f"         first_val: '{first_val}'")
             
             if first_val:
                 if first_val.startswith('rate by') or first_val.startswith('rate:'):
@@ -388,11 +612,16 @@ def create_filtered_dataframe(sheet):
         else:
             # This could be the cost names row - check if it has non-empty values in cost columns
             has_cost_names = False
+            non_empty_values = []
             for col_idx in range(first_cost_idx, len(row_values)):
                 val = row_values[col_idx] if col_idx < len(row_values) else None
                 if val is not None and str(val).strip():
                     has_cost_names = True
-                    break
+                    non_empty_values.append((col_idx, val))
+                    if len(non_empty_values) >= 3:  # Limit output
+                        break
+            
+            print(f"         has_cost_names: {has_cost_names}, sample values: {non_empty_values}")
             
             if has_cost_names:
                 cost_row_idx = row_idx
@@ -438,13 +667,22 @@ def create_filtered_dataframe(sheet):
         if weight_range_labels:
             print(f"   Built {len(weight_range_labels)} weight range column labels")
     
-    # Debug output
-    print(f"\n   Cost row (Row {cost_row_idx}, first 10 from col {first_cost_idx}): {cost_row[first_cost_idx:first_cost_idx+10]}")
-    print(f"   Type row (Row {type_row_idx}, first 10 from col {first_cost_idx}): {type_row[first_cost_idx:first_cost_idx+10]}")
+    # Debug output - show more detail about what we found
+    print(f"\n   === DEBUG: Row structure analysis ===")
+    print(f"   Cost row (Row {cost_row_idx}):")
+    print(f"      Raw values (col {first_cost_idx} to {first_cost_idx+15}): {cost_row[first_cost_idx:first_cost_idx+15]}")
+    print(f"   Type row (Row {type_row_idx}):")
+    print(f"      Raw values (col {first_cost_idx} to {first_cost_idx+15}): {type_row[first_cost_idx:first_cost_idx+15]}")
+    
+    # Show all rows from cost_row_idx to type_row_idx for debugging
+    print(f"\n   === All rows from Row {cost_row_idx} to Row {type_row_idx} ===")
+    for r in range(cost_row_idx, type_row_idx + 1):
+        row_vals = get_row_values(sheet, r)
+        print(f"      Row {r} (first 10 from col {first_cost_idx}): {row_vals[first_cost_idx:first_cost_idx+10] if len(row_vals) > first_cost_idx else 'N/A'}")
     
     # Step 4: Extract CostColumn objects
     cost_columns = extract_cost_columns(
-        sheet, first_cost_idx, cost_row, applies_if_row, rate_by_row, min_row, type_row
+        sheet, first_cost_idx, cost_row, cost_row_idx, applies_if_row, rate_by_row, min_row, type_row
     )
     print(f"\n   Extracted {len(cost_columns)} cost types")
     for i, cost in enumerate(cost_columns[:5]):
@@ -467,6 +705,13 @@ def create_filtered_dataframe(sheet):
     header = ['Lane #']  # First column is Lane #
     current_cost_name = None
     
+    # Build a map of currency column index -> cost name from extracted cost_columns
+    currency_col_to_name = {}
+    for cost_col in cost_columns:
+        if cost_col.currency_col_idx is not None:
+            currency_col_to_name[cost_col.currency_col_idx] = cost_col.name
+    print(f"   Currency column to cost name map: {currency_col_to_name}")
+    
     for col_idx in range(first_cost_idx, max_col):
         # Get values from different rows for this column
         cost_name = cost_row[col_idx] if col_idx < len(cost_row) else None
@@ -474,8 +719,10 @@ def create_filtered_dataframe(sheet):
         col_type = type_row[col_idx] if col_idx < len(type_row) else None
         weight_range_label = weight_range_labels.get(col_idx)
         
-        # Clean cost name (remove parentheses)
-        if cost_name is not None and str(cost_name).strip() != '':
+        # Clean cost name (remove parentheses) - from cost_row OR from extracted cost_columns
+        if col_idx in currency_col_to_name:
+            current_cost_name = currency_col_to_name[col_idx]
+        elif cost_name is not None and str(cost_name).strip() != '':
             current_cost_name = clean_cost_name(cost_name)
         
         # Determine column header based on type
@@ -487,8 +734,8 @@ def create_filtered_dataframe(sheet):
         is_max_column = min_str == 'MAX' and not weight_range_label
         
         if col_type_str == 'currency':
-            # This is the currency column - use the cost name
-            col_header = current_cost_name if current_cost_name else 'Currency'
+            # This is the currency column - use the cost name from extracted cost_columns
+            col_header = currency_col_to_name.get(col_idx, current_cost_name if current_cost_name else 'Currency')
         elif col_type_str == 'flat':
             # Price Flat column
             if is_min_column:
