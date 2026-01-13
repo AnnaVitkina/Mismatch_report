@@ -191,6 +191,12 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     use_shipment_id = has_shipment_id_etof and has_shipment_id_lc
     print(f"   DEBUG has_shipment_id_etof: {has_shipment_id_etof}, has_shipment_id_lc: {has_shipment_id_lc}, use_shipment_id: {use_shipment_id}")
     
+    # Check if DELIVERY NUMBER is present in both dataframes (fallback option)
+    has_delivery_number_etof = 'DELIVERY NUMBER(s)' in etof_dataframe.columns or 'DELIVERY_NUMBER' in etof_dataframe.columns
+    has_delivery_number_lc = 'DELIVERY_NUMBER' in lc_dataframe_final.columns
+    use_delivery_number = has_delivery_number_etof and has_delivery_number_lc and not use_shipment_id
+    print(f"   DEBUG has_delivery_number_etof: {has_delivery_number_etof}, has_delivery_number_lc: {has_delivery_number_lc}, use_delivery_number: {use_delivery_number}")
+    
     if use_shipment_id:
         # Determine which SHIPMENT_ID column name exists in ETOF
         etof_shipment_col = 'SHIPMENT_ID' if 'SHIPMENT_ID' in etof_dataframe.columns else 'SHIPMENT ID(s)'
@@ -268,13 +274,92 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
             lc_dataframe_final = lc_dataframe_final.rename(columns={'Order file #': 'LC #'})
         else:
             lc_dataframe_final['LC #'] = None
+    
+    elif use_delivery_number:
+        # Use DELIVERY NUMBER for mapping (second fallback)
+        # Determine which DELIVERY NUMBER column name exists in ETOF
+        etof_delivery_col = 'DELIVERY NUMBER(s)' if 'DELIVERY NUMBER(s)' in etof_dataframe.columns else 'DELIVERY_NUMBER'
+        print(f"   DEBUG using ETOF delivery column: '{etof_delivery_col}'")
+        
+        # Create mapping dictionaries: DELIVERY_NUMBER (from ETOF) -> ETOF #, LC #, and Carrier agreement #
+        delivery_to_etof = {}
+        delivery_to_lc = {}
+        delivery_to_carrier_agreement = {}
+        
+        for _, row in etof_dataframe.iterrows():
+            delivery_number = str(row.get(etof_delivery_col, '')).strip()
+            etof_value = str(row.get('ETOF #', '')).strip()
+            lc_value = str(row.get('LC #', '')).strip() if 'LC #' in etof_dataframe.columns else None
+            carrier_agreement_value = str(row.get('Carrier agreement #', '')).strip() if has_carrier_agreement else None
+            
+            if pd.notna(row.get(etof_delivery_col)) and delivery_number and delivery_number.lower() != 'nan':
+                if pd.notna(row.get('ETOF #')) and etof_value and etof_value.lower() != 'nan':
+                    # Map DELIVERY_NUMBER (key) to ETOF # (value)
+                    delivery_to_etof[delivery_number] = etof_value
+                
+                if lc_value and pd.notna(row.get('LC #')) and lc_value.lower() != 'nan':
+                    # Map DELIVERY_NUMBER (key) to LC # (value)
+                    delivery_to_lc[delivery_number] = lc_value
+                
+                if carrier_agreement_value and pd.notna(row.get('Carrier agreement #')) and carrier_agreement_value.lower() != 'nan':
+                    # Map DELIVERY_NUMBER (key) to Carrier agreement # (value)
+                    delivery_to_carrier_agreement[delivery_number] = carrier_agreement_value
+        
+        print(f"   DEBUG delivery_to_etof mappings created: {len(delivery_to_etof)}")
+        print(f"   DEBUG delivery_to_carrier_agreement mappings: {len(delivery_to_carrier_agreement)}")
+        if delivery_to_etof:
+            sample_keys = list(delivery_to_etof.keys())[:3]
+            print(f"   DEBUG sample ETOF DELIVERY_NUMBERs (keys): {sample_keys}")
+        
+        # Show sample LC DELIVERY_NUMBERs
+        lc_delivery_numbers = lc_dataframe_final['DELIVERY_NUMBER'].dropna().unique()[:5].tolist()
+        print(f"   DEBUG sample LC DELIVERY_NUMBERs: {lc_delivery_numbers}")
+        
+        # Map ETOF # values by matching DELIVERY_NUMBER
+        def find_etof_number_by_delivery(row):
+            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
+            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+                return None
+            return delivery_to_etof.get(delivery_number)
+        
+        # Map LC # values by matching DELIVERY_NUMBER
+        def find_lc_number_by_delivery(row):
+            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
+            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+                return None
+            return delivery_to_lc.get(delivery_number)
+        
+        # Map Carrier agreement # values by matching DELIVERY_NUMBER
+        def find_carrier_agreement_by_delivery(row):
+            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
+            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+                return None
+            return delivery_to_carrier_agreement.get(delivery_number)
+        
+        # Apply mappings
+        lc_dataframe_final['ETOF #'] = lc_dataframe_final.apply(find_etof_number_by_delivery, axis=1)
+        matched_count = lc_dataframe_final['ETOF #'].notna().sum()
+        print(f"   DEBUG rows with ETOF # after DELIVERY_NUMBER mapping: {matched_count} / {len(lc_dataframe_final)}")
+        
+        # Map Carrier agreement # from ETOF if available
+        if has_carrier_agreement:
+            lc_dataframe_final['Carrier agreement #'] = lc_dataframe_final.apply(find_carrier_agreement_by_delivery, axis=1)
+        
+        # Map LC # from ETOF if available, otherwise use existing or create empty
+        if delivery_to_lc:
+            lc_dataframe_final['LC #'] = lc_dataframe_final.apply(find_lc_number_by_delivery, axis=1)
+        elif 'Order file #' in lc_dataframe_final.columns:
+            lc_dataframe_final = lc_dataframe_final.rename(columns={'Order file #': 'LC #'})
+        else:
+            lc_dataframe_final['LC #'] = None
+    
     else:
         # Fall back to LC # matching (original method) - requires Order file #
         if 'Order file #' not in lc_dataframe_final.columns:
-            raise ValueError("lc_dataframe_updated must have 'Order file #' column when SHIPMENT_ID is not available")
+            raise ValueError("lc_dataframe_updated must have 'Order file #' column when SHIPMENT_ID and DELIVERY_NUMBER are not available")
         
         if 'LC #' not in etof_dataframe.columns:
-            raise ValueError("etof_dataframe must have 'LC #' column when SHIPMENT_ID is not available")
+            raise ValueError("etof_dataframe must have 'LC #' column when SHIPMENT_ID and DELIVERY_NUMBER are not available")
         
         # Create mapping dictionaries: LC # (from ETOF) -> ETOF # and Carrier agreement #
         lc_to_etof = {}
@@ -424,8 +509,8 @@ def process_order_lc_etof_mapping(lc_input_path, etof_path, order_files_path=Non
 
 
 if __name__ == "__main__":
-    lc_input_path = "LC.xml"
-    etof_path = "etofs_1.xlsx"
+    lc_input_path = "lc densir 2.xml"
+    etof_path = "etof densir 2.xlsx"
     
     # If order_files_path is provided, it will use order file mapping logic
     # If not provided (None), it will use SHIPMENT_ID mapping
