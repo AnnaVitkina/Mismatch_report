@@ -84,7 +84,7 @@ def process_etof_file(file_path):
     
     if shipment_id_missing:
         # Read mismatch file to get SHIPMENT_ID mapping
-        mismatch_path = os.path.join(input_folder, 'mismatch_densir.xlsx')
+        mismatch_path = os.path.join(input_folder, 'mismatch_report.xlsx')
         if os.path.exists(mismatch_path):
             df_mismatch = pd.read_excel(mismatch_path)
             
@@ -102,3 +102,4 @@ if __name__ == "__main__":
     etof_dataframe, etof_column_names = process_etof_file('etofs_densir.xlsx')
     save_dataframe_to_excel(etof_dataframe, "etof_densir.xlsx")
     print(etof_dataframe.head())
+
