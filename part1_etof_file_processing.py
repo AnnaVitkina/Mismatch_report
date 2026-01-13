@@ -83,23 +83,66 @@ def process_etof_file(file_path):
     )
     
     if shipment_id_missing:
+        print(f"   SHIPMENT_ID is missing in ETOF, looking for mismatch file...")
+        
         # Find mismatch file in input folder (any file containing 'mismatch' in the name)
-        mismatch_files = [f for f in os.listdir(input_folder) 
-                         if 'mismatch' in f.lower() and (f.endswith('.xlsx') or f.endswith('.xls'))]
+        try:
+            if os.path.exists(input_folder):
+                all_files = os.listdir(input_folder)
+                mismatch_files = [f for f in all_files 
+                                 if 'mismatch' in f.lower() and (f.endswith('.xlsx') or f.endswith('.xls'))]
+                print(f"   Input folder has {len(all_files)} files, found {len(mismatch_files)} mismatch file(s)")
+            else:
+                print(f"   WARNING: Input folder '{input_folder}' does not exist!")
+                mismatch_files = []
+        except Exception as e:
+            print(f"   ERROR listing input folder: {e}")
+            mismatch_files = []
         
         if mismatch_files:
             # Use the first matching file found
             mismatch_path = os.path.join(input_folder, mismatch_files[0])
             print(f"   Found mismatch file: {mismatch_files[0]}")
-            df_mismatch = pd.read_excel(mismatch_path)
             
-            # Create mapping from ETOF_NUMBER to SHIPMENT_ID
-            if 'ETOF_NUMBER' in df_mismatch.columns and 'SHIPMENT_ID' in df_mismatch.columns:
-                etof_to_shipment = df_mismatch.set_index('ETOF_NUMBER')['SHIPMENT_ID'].to_dict()
+            try:
+                df_mismatch = pd.read_excel(mismatch_path)
+                print(f"   Mismatch file has {len(df_mismatch)} rows, columns: {df_mismatch.columns.tolist()}")
                 
-                # Map SHIPMENT_ID using ETOF # column from etof file
-                if 'ETOF #' in df_etofs.columns:
-                    df_etofs['SHIPMENT_ID'] = df_etofs['ETOF #'].map(etof_to_shipment)
+                # Create mapping from ETOF_NUMBER to SHIPMENT_ID
+                if 'ETOF_NUMBER' in df_mismatch.columns and 'SHIPMENT_ID' in df_mismatch.columns:
+                    # Drop duplicates to avoid issues with set_index
+                    df_mismatch_unique = df_mismatch[['ETOF_NUMBER', 'SHIPMENT_ID']].drop_duplicates(subset='ETOF_NUMBER')
+                    
+                    # Convert ETOF_NUMBER to string for consistent matching
+                    df_mismatch_unique['ETOF_NUMBER'] = df_mismatch_unique['ETOF_NUMBER'].astype(str)
+                    etof_to_shipment = df_mismatch_unique.set_index('ETOF_NUMBER')['SHIPMENT_ID'].to_dict()
+                    print(f"   Created mapping with {len(etof_to_shipment)} unique ETOF->SHIPMENT_ID entries")
+                    
+                    # Show sample mapping keys for debugging
+                    sample_keys = list(etof_to_shipment.keys())[:3]
+                    print(f"   Sample mismatch ETOF_NUMBER values: {sample_keys}")
+                    
+                    # Map SHIPMENT_ID using ETOF # column from etof file
+                    if 'ETOF #' in df_etofs.columns:
+                        # Show sample ETOF # values for comparison
+                        sample_etof = df_etofs['ETOF #'].head(3).tolist()
+                        print(f"   Sample ETOF 'ETOF #' values: {sample_etof}")
+                        
+                        # Convert to string for consistent matching
+                        df_etofs['SHIPMENT_ID'] = df_etofs['ETOF #'].astype(str).map(etof_to_shipment)
+                        mapped_count = df_etofs['SHIPMENT_ID'].notna().sum()
+                        print(f"   Mapped SHIPMENT_ID for {mapped_count}/{len(df_etofs)} rows")
+                    else:
+                        print(f"   WARNING: 'ETOF #' column not found in ETOF dataframe")
+                else:
+                    print(f"   WARNING: Mismatch file missing required columns (ETOF_NUMBER and/or SHIPMENT_ID)")
+            except Exception as e:
+                print(f"   ERROR reading mismatch file: {e}")
+        else:
+            print(f"   No mismatch file found in input folder")
+    
+    # Debug: show final columns
+    print(f"   Final ETOF columns ({len(df_etofs.columns)}): {df_etofs.columns.tolist()}")
 
     return df_etofs, column_names
 
