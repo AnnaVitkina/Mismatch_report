@@ -75,9 +75,30 @@ def process_etof_file(file_path):
     if 'Carrier agreement #' in df_etofs.columns:
         df_etofs['Carrier agreement #'] = df_etofs['Carrier agreement #'].apply(extract_carrier_agreement)
 
+    # Check if SHIPMENT_ID column is missing or has no values
+    shipment_id_missing = (
+        'SHIPMENT_ID' not in df_etofs.columns or 
+        df_etofs['SHIPMENT_ID'].isna().all() or 
+        (df_etofs['SHIPMENT_ID'].astype(str).str.strip() == '').all()
+    )
+    
+    if shipment_id_missing:
+        # Read mismatch file to get SHIPMENT_ID mapping
+        mismatch_path = os.path.join(input_folder, 'mismatch_densir.xlsx')
+        if os.path.exists(mismatch_path):
+            df_mismatch = pd.read_excel(mismatch_path)
+            
+            # Create mapping from ETOF_NUMBER to SHIPMENT_ID
+            if 'ETOF_NUMBER' in df_mismatch.columns and 'SHIPMENT_ID' in df_mismatch.columns:
+                etof_to_shipment = df_mismatch.set_index('ETOF_NUMBER')['SHIPMENT_ID'].to_dict()
+                
+                # Map SHIPMENT_ID using ETOF # column from etof file
+                if 'ETOF #' in df_etofs.columns:
+                    df_etofs['SHIPMENT_ID'] = df_etofs['ETOF #'].map(etof_to_shipment)
+
     return df_etofs, column_names
 
 if __name__ == "__main__":
-    etof_dataframe, etof_column_names = process_etof_file('etofs.xlsx')
-    save_dataframe_to_excel(etof_dataframe, "etof_processed.xlsx")
+    etof_dataframe, etof_column_names = process_etof_file('etofs_densir.xlsx')
+    save_dataframe_to_excel(etof_dataframe, "etof_densir.xlsx")
     print(etof_dataframe.head())
